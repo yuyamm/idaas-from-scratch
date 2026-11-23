@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: idaas
+      POSTGRES_PASSWORD: idaas
+      POSTGRES_DB: idaas
+    ports:
+      - "54329:5432"
+    volumes:
+      - ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U idaas"]
+      interval: 2s
+      retries: 30
+
+  idaas:
+    build: .
+    profiles: ["app"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://idaas:idaas@postgres:5432/idaas?sslmode=disable
+      BASE_URL: http://localhost:8080
+      # Development key only. Generate your own with: openssl rand -base64 32
+      ENCRYPTION_KEYS: dev:ZGV2LW9ubHktZW5jcnlwdGlvbi1rZXktMzItYnl0ZXM=
+    ports:
+      - "8080:8080"

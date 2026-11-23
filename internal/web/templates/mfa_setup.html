@@ -1,0 +1,11 @@
+{{template "head" .}}
+<p>認証アプリ（Google Authenticator など）に次のキーを登録し、表示された 6 桁のコードを入力してください。</p>
+<p>キー：<code>{{.Data.Secret}}</code></p>
+<p style="font-size:.8rem">URL：<code>{{.Data.URL}}</code></p>
+<form method="post" action="{{.Base}}/mfa/setup">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}">
+<label for="code">6 桁のコード</label>
+<input type="text" id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required autofocus>
+<button type="submit">登録</button>
+</form>
+{{template "foot" .}}

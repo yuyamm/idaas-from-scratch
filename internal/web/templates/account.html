@@ -1,0 +1,14 @@
+{{template "head" .}}
+<p>{{.Data.User.LoginID}}（{{.Data.User.Email}}{{if not .Data.User.EmailVerified}}・未検証{{end}}）</p>
+{{if not .Data.User.EmailVerified}}
+<form method="post" action="{{.Base}}/account/verify-email"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="secondary" type="submit">確認メールを送る</button></form>
+{{end}}
+<h2 style="font-size:1rem;margin-top:24px">多要素認証</h2>
+<ul>{{range .Data.Factors}}<li>{{.Type}} {{.Label}}</li>{{else}}<li>未設定</li>{{end}}</ul>
+<form method="post" action="{{.Base}}/account/totp"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="secondary" type="submit">認証アプリを登録</button></form>
+<div class="links"><a href="{{.Base}}/passkey/register">パスキーを登録</a></div>
+{{if .Data.Providers}}<h2 style="font-size:1rem;margin-top:24px">外部アカウント</h2>
+<ul>{{range .Data.Links}}<li>{{.ProviderName}}（{{.Email}}）</li>{{end}}</ul>
+{{range .Data.Providers}}<form method="post" action="{{$.Base}}/federation/{{.ID}}/link"><input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button class="secondary" type="submit">{{.Name}} と連携</button></form>{{end}}{{end}}
+<form method="post" action="{{.Base}}/logout"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="secondary" type="submit">ログアウト</button></form>
+{{template "foot" .}}

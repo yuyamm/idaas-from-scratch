@@ -1,0 +1,8 @@
+{{template "head" .}}
+<p>認証アプリを使えなくなったときのためのリカバリーコードです。安全な場所に保存してください。各コードは 1 回だけ使えます。この画面は再表示できません。</p>
+<ul class="codes">{{range .Data.Codes}}<li class="recovery-code">{{.}}</li>{{end}}</ul>
+<form method="post" action="{{.Base}}/mfa/continue">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}">
+<button type="submit">続ける</button>
+</form>
+{{template "foot" .}}

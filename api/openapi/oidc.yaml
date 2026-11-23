@@ -1,0 +1,649 @@
+openapi: 3.1.0
+info:
+  title: IdaaS OpenID Provider API
+  version: 1.0.0
+  summary: OpenID Connect / OAuth 2.0 のエンドポイント
+  description: |
+    IdaaS が OpenID Provider / OAuth 2.0 認可サーバーとして公開するエンドポイント。
+    リクエスト・レスポンスの形式は各仕様に従う。この定義は**本システムが対応する範囲**（対応する grant、
+    クライアント認証方式、スコープ、クレーム、独自クレーム、既定の有効期限）を確定させるためのもの。
+
+    ## テナントと issuer
+    テナントごとに issuer を分ける（`https://idaas.example.com/t/{tenant}`）。
+    エンドポイントはすべて issuer 配下にあり、Discovery で通知する。
+
+    ## 対応範囲
+    | 項目 | 対応 |
+    |---|---|
+    | response_type | `code` のみ（Implicit / Hybrid は非対応） |
+    | grant_type | `authorization_code`、`refresh_token`、`client_credentials`（ROPC は非対応） |
+    | PKCE | `S256` のみ。public クライアントは必須。confidential クライアントは任意だが、`code_challenge` を送った場合は必ず検証する |
+    | クライアント認証 | `client_secret_basic`、`client_secret_post`、`none`（public クライアント） |
+    | スコープ | `openid`、`profile`、`email`、`offline_access` |
+    | ID Token 署名 | `RS256` |
+    | アクセストークン形式 | JWT（RFC 9068）または opaque。クライアントごとに選択 |
+    | ログアウト | RP-Initiated Logout、Back-Channel Logout |
+
+    ## 既定の有効期限（テナント設定で変更可）
+    | 対象 | 既定値 |
+    |---|---|
+    | 認可コード | 60 秒（ワンタイム） |
+    | アクセストークン | 600 秒 |
+    | ID Token | 600 秒 |
+    | リフレッシュトークン | 30 日（使用のたびにローテーション） |
+
+    ## 参照仕様
+    - [OAuth 2.0（RFC 6749）](https://www.rfc-editor.org/rfc/rfc6749)
+    - [PKCE（RFC 7636）](https://www.rfc-editor.org/rfc/rfc7636)
+    - [OAuth 2.0 Security BCP（RFC 9700）](https://www.rfc-editor.org/rfc/rfc9700)
+    - [Token Introspection（RFC 7662）](https://www.rfc-editor.org/rfc/rfc7662)
+    - [Token Revocation（RFC 7009）](https://www.rfc-editor.org/rfc/rfc7009)
+    - [JWT アクセストークン（RFC 9068）](https://www.rfc-editor.org/rfc/rfc9068)
+    - [JWK（RFC 7517）](https://www.rfc-editor.org/rfc/rfc7517)
+    - [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html)
+    - [OpenID Connect Discovery 1.0](https://openid.net/specs/openid-connect-discovery-1_0.html)
+    - [OpenID Connect RP-Initiated Logout 1.0](https://openid.net/specs/openid-connect-rpinitiated-1_0.html)
+    - [OpenID Connect Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html)
+servers:
+  - url: https://idaas.example.com/t/{tenant}
+    variables:
+      tenant:
+        default: acme
+        description: テナントの slug
+tags:
+  - name: Discovery
+  - name: Authorization
+  - name: Token
+  - name: UserInfo
+  - name: Logout
+
+paths:
+  /.well-known/openid-configuration:
+    get:
+      tags: [Discovery]
+      operationId: getOpenIdConfiguration
+      summary: Discovery メタデータ
+      description: '[OpenID Connect Discovery 1.0 §3](https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderMetadata)'
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProviderMetadata' }
+
+  /jwks:
+    get:
+      tags: [Discovery]
+      operationId: getJwks
+      summary: 署名検証用の公開鍵（JWK Set）
+      description: |
+        [RFC 7517 §5](https://www.rfc-editor.org/rfc/rfc7517#section-5)。
+        `next`・`current`・`retiring` の鍵を公開する。検証側は `kid` で鍵を選ぶ。
+      security: []
+      responses:
+        '200':
+          description: OK
+          headers:
+            Cache-Control:
+              schema: { type: string, example: 'public, max-age=300' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JwkSet' }
+
+  /authorize:
+    get:
+      tags: [Authorization]
+      operationId: authorize
+      summary: 認可エンドポイント
+      description: |
+        [RFC 6749 §4.1.1](https://www.rfc-editor.org/rfc/rfc6749#section-4.1.1)、
+        [OIDC Core §3.1.2](https://openid.net/specs/openid-connect-core-1_0.html#AuthorizationEndpoint)、
+        [RFC 7636 §4.3](https://www.rfc-editor.org/rfc/rfc7636#section-4.3)。
+
+        ブラウザで開く。ログイン・MFA・同意画面を経て、`redirect_uri` に `code` と `state` を付けてリダイレクトする。
+        `client_id` または `redirect_uri` が不正な場合はリダイレクトせず、エラー画面を表示する。
+        それ以外のエラーは `redirect_uri` に `error` を付けてリダイレクトする。
+      security: []
+      parameters:
+        - { name: response_type, in: query, required: true, schema: { type: string, const: code } }
+        - { name: client_id, in: query, required: true, schema: { type: string } }
+        - name: redirect_uri
+          in: query
+          required: true
+          description: 登録値と完全一致で検証する
+          schema: { type: string, format: uri }
+        - name: scope
+          in: query
+          required: true
+          description: '`openid` を含める。空白区切り。クライアントに許可されていないスコープは無視する'
+          schema: { type: string, example: openid profile email offline_access }
+        - name: state
+          in: query
+          description: CSRF 対策（推奨）。指定された場合はリダイレクトに含めて返す
+          schema: { type: string }
+        - name: nonce
+          in: query
+          description: ID Token のリプレイ対策（Code Flow では任意）。指定された場合は ID Token に含める
+          schema: { type: string }
+        - name: code_challenge
+          in: query
+          description: public クライアントは必須。confidential クライアントは任意
+          schema: { type: string, minLength: 43, maxLength: 128 }
+        - { name: code_challenge_method, in: query, description: '`code_challenge` を指定する場合は `S256` のみ', schema: { type: string, const: S256 } }
+        - name: prompt
+          in: query
+          schema: { type: string, enum: [none, login, consent] }
+        - name: max_age
+          in: query
+          description: 秒。前回認証からの経過がこれを超えたら再認証する
+          schema: { type: integer, minimum: 0 }
+        - name: login_hint
+          in: query
+          schema: { type: string }
+        - name: acr_values
+          in: query
+          description: '`urn:idaas:acr:mfa` を指定すると MFA を要求する'
+          schema: { type: string }
+      responses:
+        '302':
+          description: |
+            成功時：`{redirect_uri}?code=...&state=...&iss=...`
+            エラー時：`{redirect_uri}?error=...&error_description=...&state=...&iss=...`
+            （`iss` は [RFC 9207](https://www.rfc-editor.org/rfc/rfc9207) に従って付与する）
+          headers:
+            Location:
+              required: true
+              schema: { type: string, format: uri }
+        '400':
+          description: '`client_id` / `redirect_uri` が不正（リダイレクトしない）'
+          content:
+            text/html:
+              schema: { type: string }
+
+  /token:
+    post:
+      tags: [Token]
+      operationId: token
+      summary: トークンエンドポイント
+      description: |
+        [RFC 6749 §3.2](https://www.rfc-editor.org/rfc/rfc6749#section-3.2)、
+        [OIDC Core §3.1.3](https://openid.net/specs/openid-connect-core-1_0.html#TokenEndpoint)。
+
+        - **authorization_code**：認可コードはワンタイム。再利用を検知したら、そのコードから発行したトークンを
+          `grant_id` 単位ですべて失効させる。
+        - **refresh_token**：使用のたびに新しいリフレッシュトークンを発行する（ローテーション）。
+          使用済みのトークンが提示されたら、同じファミリーのトークンをすべて失効させる。
+        - **client_credentials**：confidential クライアントのみ。ID Token とリフレッシュトークンは発行しない。
+      security:
+        - clientSecretBasic: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/AuthorizationCodeGrantRequest'
+                - $ref: '#/components/schemas/RefreshTokenGrantRequest'
+                - $ref: '#/components/schemas/ClientCredentialsGrantRequest'
+              discriminator:
+                propertyName: grant_type
+                mapping:
+                  authorization_code: '#/components/schemas/AuthorizationCodeGrantRequest'
+                  refresh_token: '#/components/schemas/RefreshTokenGrantRequest'
+                  client_credentials: '#/components/schemas/ClientCredentialsGrantRequest'
+      responses:
+        '200':
+          description: OK
+          headers:
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '400':
+          $ref: '#/components/responses/OAuthError'
+        '401':
+          description: クライアント認証に失敗（`invalid_client`）
+          headers:
+            WWW-Authenticate:
+              schema: { type: string, example: 'Basic realm="idaas"' }
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OAuthError' }
+
+  /userinfo:
+    get:
+      tags: [UserInfo]
+      operationId: userinfo
+      summary: UserInfo エンドポイント
+      description: |
+        [OIDC Core §5.3](https://openid.net/specs/openid-connect-core-1_0.html#UserInfo)。
+        アクセストークンのスコープに応じたクレームを返す。
+      security:
+        - bearer: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserInfo' }
+        '401':
+          description: トークンが無効（`invalid_token`）
+          headers:
+            WWW-Authenticate:
+              schema: { type: string, example: 'Bearer error="invalid_token"' }
+
+  /introspect:
+    post:
+      tags: [Token]
+      operationId: introspect
+      summary: Token Introspection
+      description: |
+        [RFC 7662](https://www.rfc-editor.org/rfc/rfc7662)。
+        テナントの confidential クライアント（リソースサーバーを含む）が呼び出せる。アクセストークンは発行先に関わらず
+        Introspection できる。リフレッシュトークンは発行先のクライアントだけが Introspection できる。
+        トークンが無効・失効・期限切れの場合は `{"active": false}` だけを返す。
+      security:
+        - clientSecretBasic: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/ClientSecretPost'
+                - type: object
+                  required: [token]
+                  properties:
+                    token: { type: string }
+                    token_type_hint: { type: string, enum: [access_token, refresh_token] }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntrospectionResponse' }
+        '401':
+          description: クライアント認証に失敗
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OAuthError' }
+
+  /revoke:
+    post:
+      tags: [Token]
+      operationId: revoke
+      summary: Token Revocation
+      description: |
+        [RFC 7009](https://www.rfc-editor.org/rfc/rfc7009)。
+        リフレッシュトークンを失効させた場合、同じ `grant_id` のアクセストークンも失効させる。
+        存在しない・既に失効済みのトークンでも `200` を返す。
+      security:
+        - clientSecretBasic: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/ClientSecretPost'
+                - type: object
+                  required: [token]
+                  properties:
+                    token: { type: string }
+                    token_type_hint: { type: string, enum: [access_token, refresh_token] }
+      responses:
+        '200':
+          description: 失効させた（または対象なし）
+        '400':
+          $ref: '#/components/responses/OAuthError'
+        '401':
+          description: クライアント認証に失敗
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OAuthError' }
+
+  /logout:
+    get:
+      tags: [Logout]
+      operationId: endSession
+      summary: RP-Initiated Logout
+      description: |
+        [OpenID Connect RP-Initiated Logout 1.0](https://openid.net/specs/openid-connect-rpinitiated-1_0.html)。
+        IdP セッションを破棄し、同じセッションでログインしていた RP に Back-Channel Logout を送る。
+      security: []
+      parameters:
+        - { name: id_token_hint, in: query, schema: { type: string } }
+        - { name: client_id, in: query, schema: { type: string } }
+        - name: post_logout_redirect_uri
+          in: query
+          description: 登録値と完全一致する場合のみリダイレクトする
+          schema: { type: string, format: uri }
+        - { name: state, in: query, schema: { type: string } }
+      responses:
+        '302':
+          description: '`post_logout_redirect_uri` へリダイレクト（`state` を付与）'
+          headers:
+            Location:
+              required: true
+              schema: { type: string, format: uri }
+        '200':
+          description: '`post_logout_redirect_uri` がない場合、ログアウト完了画面を表示する'
+          content:
+            text/html:
+              schema: { type: string }
+
+webhooks:
+  backchannelLogout:
+    post:
+      tags: [Logout]
+      operationId: backchannelLogout
+      summary: Back-Channel Logout（RP が受け取る）
+      description: |
+        [OpenID Connect Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html)。
+        クライアントに登録された `backchannel_logout_uri` に、IdaaS から `logout_token` を POST する。
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [logout_token]
+              properties:
+                logout_token:
+                  type: string
+                  description: 署名付き JWT。クレームは `LogoutTokenClaims`
+      responses:
+        '200': { description: 受理した }
+
+components:
+  securitySchemes:
+    clientSecretBasic:
+      type: http
+      scheme: basic
+      description: '`client_secret_basic`。`client_secret_post` の場合はリクエストボディに `client_id` と `client_secret` を含める'
+    bearer:
+      type: http
+      scheme: bearer
+      description: アクセストークン
+
+  headers:
+    NoStore:
+      required: true
+      schema: { type: string, const: no-store }
+
+  responses:
+    OAuthError:
+      description: '[RFC 6749 §5.2](https://www.rfc-editor.org/rfc/rfc6749#section-5.2) のエラー'
+      headers:
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/OAuthError' }
+
+  schemas:
+    ProviderMetadata:
+      type: object
+      description: 本システムが返す値を `const` / `enum` で固定する
+      required:
+        - issuer
+        - authorization_endpoint
+        - token_endpoint
+        - userinfo_endpoint
+        - jwks_uri
+        - response_types_supported
+        - subject_types_supported
+        - id_token_signing_alg_values_supported
+      properties:
+        issuer: { type: string, format: uri, example: 'https://idaas.example.com/t/acme' }
+        authorization_endpoint: { type: string, format: uri, example: 'https://idaas.example.com/t/acme/authorize' }
+        token_endpoint: { type: string, format: uri, example: 'https://idaas.example.com/t/acme/token' }
+        userinfo_endpoint: { type: string, format: uri, example: 'https://idaas.example.com/t/acme/userinfo' }
+        jwks_uri: { type: string, format: uri, example: 'https://idaas.example.com/t/acme/jwks' }
+        introspection_endpoint: { type: string, format: uri, example: 'https://idaas.example.com/t/acme/introspect' }
+        revocation_endpoint: { type: string, format: uri, example: 'https://idaas.example.com/t/acme/revoke' }
+        end_session_endpoint: { type: string, format: uri, example: 'https://idaas.example.com/t/acme/logout' }
+        scopes_supported:
+          type: array
+          items: { type: string }
+          const: [openid, profile, email, offline_access]
+        response_types_supported:
+          type: array
+          items: { type: string }
+          const: [code]
+        response_modes_supported:
+          type: array
+          items: { type: string }
+          const: [query]
+        grant_types_supported:
+          type: array
+          items: { type: string }
+          const: [authorization_code, refresh_token, client_credentials]
+        subject_types_supported:
+          type: array
+          items: { type: string }
+          const: [public]
+        id_token_signing_alg_values_supported:
+          type: array
+          items: { type: string }
+          const: [RS256]
+        token_endpoint_auth_methods_supported:
+          type: array
+          items: { type: string }
+          const: [client_secret_basic, client_secret_post, none]
+        introspection_endpoint_auth_methods_supported:
+          type: array
+          items: { type: string }
+          const: [client_secret_basic, client_secret_post]
+        revocation_endpoint_auth_methods_supported:
+          type: array
+          items: { type: string }
+          const: [client_secret_basic, client_secret_post, none]
+        code_challenge_methods_supported:
+          type: array
+          items: { type: string }
+          const: [S256]
+        claims_supported:
+          type: array
+          items: { type: string }
+          const: [sub, iss, aud, exp, iat, auth_time, nonce, acr, amr, sid, name, given_name, family_name, email, email_verified, roles]
+        acr_values_supported:
+          type: array
+          items: { type: string }
+          const: ['urn:idaas:acr:pwd', 'urn:idaas:acr:mfa']
+        prompt_values_supported:
+          type: array
+          items: { type: string }
+          const: [none, login, consent]
+        authorization_response_iss_parameter_supported: { type: boolean, const: true }
+        backchannel_logout_supported: { type: boolean, const: true }
+        backchannel_logout_session_supported: { type: boolean, const: true }
+
+    JwkSet:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            required: [kty, kid, use, alg, n, e]
+            properties:
+              kty: { type: string, const: RSA }
+              kid: { type: string }
+              use: { type: string, const: sig }
+              alg: { type: string, const: RS256 }
+              n: { type: string }
+              e: { type: string }
+
+    ClientSecretPost:
+      type: object
+      description: '`client_secret_post` または public クライアント（`none`）の場合に指定する'
+      properties:
+        client_id: { type: string }
+        client_secret: { type: string }
+
+    AuthorizationCodeGrantRequest:
+      allOf:
+        - $ref: '#/components/schemas/ClientSecretPost'
+        - type: object
+          required: [grant_type, code, redirect_uri]
+          properties:
+            grant_type: { type: string, const: authorization_code }
+            code: { type: string }
+            redirect_uri: { type: string, format: uri, description: 認可リクエストと同じ値 }
+            code_verifier: { type: string, minLength: 43, maxLength: 128, description: '認可リクエストで `code_challenge` を送った場合は必須' }
+    RefreshTokenGrantRequest:
+      allOf:
+        - $ref: '#/components/schemas/ClientSecretPost'
+        - type: object
+          required: [grant_type, refresh_token]
+          properties:
+            grant_type: { type: string, const: refresh_token }
+            refresh_token: { type: string }
+            scope: { type: string, description: 元のスコープの部分集合のみ指定できる }
+    ClientCredentialsGrantRequest:
+      allOf:
+        - $ref: '#/components/schemas/ClientSecretPost'
+        - type: object
+          required: [grant_type]
+          properties:
+            grant_type: { type: string, const: client_credentials }
+            scope: { type: string }
+
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, const: Bearer }
+        expires_in: { type: integer, example: 600 }
+        refresh_token:
+          type: string
+          description: '`offline_access` を許可した authorization_code / refresh_token の場合のみ'
+        id_token:
+          type: string
+          description: '`openid` スコープの authorization_code / refresh_token の場合のみ。クレームは `IdTokenClaims`'
+        scope: { type: string }
+
+    OAuthError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum:
+            - invalid_request
+            - invalid_client
+            - invalid_grant
+            - unauthorized_client
+            - unsupported_grant_type
+            - invalid_scope
+        error_description: { type: string }
+
+    UserInfo:
+      type: object
+      required: [sub]
+      properties:
+        sub: { type: string, description: 内部ユーザー ID }
+        name: { type: string, description: '`profile` スコープ' }
+        given_name: { type: string, description: '`profile` スコープ' }
+        family_name: { type: string, description: '`profile` スコープ' }
+        email: { type: string, format: email, description: '`email` スコープ' }
+        email_verified: { type: boolean, description: '`email` スコープ' }
+        roles:
+          type: array
+          items: { type: string }
+          description: 独自クレーム。実効ロール名（直接割り当て + グループ経由）
+
+    IntrospectionResponse:
+      type: object
+      required: [active]
+      properties:
+        active: { type: boolean }
+        scope: { type: string }
+        client_id: { type: string }
+        sub: { type: string }
+        token_type: { type: string, enum: [Bearer, refresh_token] }
+        exp: { type: integer }
+        iat: { type: integer }
+        iss: { type: string }
+        aud:
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: string }
+        jti: { type: string }
+
+    IdTokenClaims:
+      type: object
+      description: '[OIDC Core §2](https://openid.net/specs/openid-connect-core-1_0.html#IDToken)。JWT ヘッダーの `kid` で署名鍵を識別する'
+      required: [iss, sub, aud, exp, iat, auth_time, acr, amr, sid]
+      properties:
+        iss: { type: string, format: uri }
+        sub: { type: string }
+        aud: { type: string, description: client_id }
+        exp: { type: integer }
+        iat: { type: integer }
+        auth_time: { type: integer }
+        nonce: { type: string, description: 認可リクエストで指定された場合のみ }
+        acr: { type: string, enum: ['urn:idaas:acr:pwd', 'urn:idaas:acr:mfa'] }
+        amr:
+          type: array
+          description: '[RFC 8176](https://www.rfc-editor.org/rfc/rfc8176) の値'
+          items: { type: string, enum: [pwd, otp, hwk, mfa, fed] }
+        sid: { type: string, description: IdP セッション ID（Back-Channel Logout で使用） }
+        at_hash: { type: string }
+        name: { type: string }
+        given_name: { type: string }
+        family_name: { type: string }
+        email: { type: string }
+        email_verified: { type: boolean }
+        roles:
+          type: array
+          items: { type: string }
+
+    AccessTokenClaims:
+      type: object
+      description: '[RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) の JWT アクセストークン（`access_token_format: jwt` の場合）。JWT ヘッダーの `typ` は `at+jwt`'
+      required: [iss, exp, aud, sub, client_id, iat, jti]
+      properties:
+        iss: { type: string, format: uri }
+        exp: { type: integer }
+        aud: { type: string, description: リソースサーバーの識別子 }
+        sub: { type: string, description: ユーザー ID。client_credentials の場合は client_id }
+        client_id: { type: string }
+        iat: { type: integer }
+        jti: { type: string }
+        scope: { type: string }
+        auth_time: { type: integer }
+        acr: { type: string }
+        amr:
+          type: array
+          items: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+
+    LogoutTokenClaims:
+      type: object
+      description: '[Back-Channel Logout 1.0 §2.4](https://openid.net/specs/openid-connect-backchannel-1_0.html#LogoutToken)。JWT ヘッダーの `typ` は `logout+jwt`'
+      required: [iss, aud, iat, exp, jti, events, sid]
+      properties:
+        iss: { type: string, format: uri }
+        aud: { type: string }
+        iat: { type: integer }
+        exp: { type: integer }
+        jti: { type: string }
+        sub: { type: string }
+        sid: { type: string }
+        events:
+          type: object
+          required: ['http://schemas.openid.net/event/backchannel-logout']
+          properties:
+            'http://schemas.openid.net/event/backchannel-logout':
+              type: object

@@ -1,0 +1,15 @@
+{{template "head" .}}
+<form method="post" action="{{.Base}}/login">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}">
+<input type="hidden" name="return_to" value="{{.ReturnTo}}">
+<label for="login_id">ログイン ID またはメールアドレス</label>
+<input type="text" id="login_id" name="login_id" value="{{.Data.LoginID}}" autocomplete="username webauthn" required autofocus>
+<label for="password">パスワード</label>
+<input type="password" id="password" name="password" autocomplete="current-password" required>
+<button type="submit">ログイン</button>
+</form>
+{{if .Data.Providers}}<div class="links">{{range .Data.Providers}}
+<form method="get" action="{{$.Base}}/federation/{{.ID}}/start"><input type="hidden" name="return_to" value="{{$.ReturnTo}}"><button class="secondary" type="submit">{{.Name}} でログイン</button></form>
+{{end}}</div>{{end}}
+<div class="links"><a href="{{.Base}}/passkey/login?return_to={{.ReturnTo}}">パスキーでログイン</a> ・ <a href="{{.Base}}/forgot">パスワードを忘れた場合</a></div>
+{{template "foot" .}}

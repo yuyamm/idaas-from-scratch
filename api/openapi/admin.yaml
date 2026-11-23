@@ -1,0 +1,1603 @@
+openapi: 3.1.0
+info:
+  title: IdaaS Admin API
+  version: 1.0.0
+  summary: テナント・ユーザー・グループ・ロール・クライアントなどを管理する API
+  description: |
+    IdaaS の管理 API。テナント配下のリソースを CRUD し、変更は Webhook で外部に通知する。
+
+    ## 整合性
+    - 単一リソースの取得（例：`GET /tenants/{tenantId}/users/{userId}`）は**強い整合性**を保証する。
+      更新系 API が成功した直後の取得には、必ずその更新が反映されている。
+    - 一覧・検索は**結果整合性**とする。更新直後の一覧には反映されていない場合がある。
+
+    ## 楽観ロック
+    更新系（`PATCH`）は `If-Match` ヘッダーに取得時の `ETag` を指定する。
+    一致しない場合は `412 Precondition Failed` を返す。
+
+    ## ページング
+    一覧系はカーソル方式。レスポンスの `next_page_token` を次のリクエストの `page_token` に渡す。
+
+    ## エラー
+    エラーは [RFC 9457 Problem Details](https://www.rfc-editor.org/rfc/rfc9457) 形式（`application/problem+json`）で返す。
+
+    ## 認証
+    管理 API 用に登録した confidential クライアントが、Client Credentials Grant で取得したアクセストークンを
+    `Authorization: Bearer` で送る。必要なスコープは各操作に記載する。
+servers:
+  - url: https://idaas.example.com/admin/v1
+security:
+  - adminToken: []
+tags:
+  - name: Tenants
+  - name: Users
+  - name: Groups
+  - name: Roles
+  - name: Clients
+  - name: IdentityProviders
+  - name: SAMLServiceProviders
+  - name: SigningKeys
+  - name: Webhooks
+  - name: AuditLogs
+
+paths:
+  /tenants:
+    get:
+      tags: [Tenants]
+      operationId: listTenants
+      summary: テナント一覧
+      security: [{ adminToken: [admin:read] }]
+      parameters:
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageToken'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Tenant' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Tenants]
+      operationId: createTenant
+      summary: テナント作成
+      security: [{ adminToken: [admin:write] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TenantCreate' }
+      responses:
+        '201':
+          $ref: '#/components/responses/TenantResponse'
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      tags: [Tenants]
+      operationId: getTenant
+      summary: テナント取得
+      security: [{ adminToken: [admin:read] }]
+      responses:
+        '200': { $ref: '#/components/responses/TenantResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Tenants]
+      operationId: updateTenant
+      summary: テナント更新
+      security: [{ adminToken: [admin:write] }]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: { $ref: '#/components/schemas/TenantUpdate' }
+      responses:
+        '200': { $ref: '#/components/responses/TenantResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Users
+  /tenants/{tenantId}/users:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      tags: [Users]
+      operationId: listUsers
+      summary: ユーザー一覧（結果整合性）
+      security: [{ adminToken: [admin:read] }]
+      parameters:
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageToken'
+        - name: user_name
+          in: query
+          description: ログイン ID の完全一致
+          schema: { type: string }
+        - name: email
+          in: query
+          description: メールアドレスの完全一致
+          schema: { type: string, format: email }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/UserStatus' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/User' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Users]
+      operationId: createUser
+      summary: ユーザー作成
+      security: [{ adminToken: [admin:write] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserCreate' }
+      responses:
+        '201': { $ref: '#/components/responses/UserResponse' }
+        '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/users/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/UserId'
+    get:
+      tags: [Users]
+      operationId: getUser
+      summary: ユーザー取得（強い整合性）
+      security: [{ adminToken: [admin:read] }]
+      responses:
+        '200': { $ref: '#/components/responses/UserResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Users]
+      operationId: updateUser
+      summary: ユーザー更新
+      security: [{ adminToken: [admin:write] }]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: { $ref: '#/components/schemas/UserUpdate' }
+      responses:
+        '200': { $ref: '#/components/responses/UserResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Users]
+      operationId: deleteUser
+      summary: ユーザー削除（論理削除）
+      description: 論理削除する（`deleted_at` を設定）。物理削除は `POST .../purge` を使う。
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 削除した }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/users/{userId}/purge:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/UserId'
+    post:
+      tags: [Users]
+      operationId: purgeUser
+      summary: ユーザーの物理削除
+      description: |
+        論理削除済みのユーザーを物理削除する（データ削除要件への対応）。
+        監査ログは削除せず、対象の個人情報は保持しない形で残す。
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 物理削除した }
+        '409':
+          description: 論理削除されていない
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/users/{userId}/disable:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/UserId'
+    post:
+      tags: [Users]
+      operationId: disableUser
+      summary: ユーザーの無効化
+      description: '`status` を `disabled` にし、既存のセッションとトークンを失効させる。'
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '200': { $ref: '#/components/responses/UserResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/users/{userId}/enable:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/UserId'
+    post:
+      tags: [Users]
+      operationId: enableUser
+      summary: ユーザーの有効化
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '200': { $ref: '#/components/responses/UserResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/users/{userId}/unlock:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/UserId'
+    post:
+      tags: [Users]
+      operationId: unlockUser
+      summary: アカウントロックの解除
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '200': { $ref: '#/components/responses/UserResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/users/{userId}/password:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/UserId'
+    put:
+      tags: [Users]
+      operationId: setUserPassword
+      summary: パスワードの設定
+      description: パスワードを設定し、既存のセッションをすべて失効させる。
+      security: [{ adminToken: [admin:write] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password:
+                  type: string
+                  format: password
+                  writeOnly: true
+                  minLength: 8
+      responses:
+        '204': { description: 設定した }
+        '422':
+          description: パスワードポリシー違反（漏洩パスワードを含む）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/users/{userId}/sessions:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/UserId'
+    delete:
+      tags: [Users]
+      operationId: revokeUserSessions
+      summary: ユーザーの全セッションを失効
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 失効させた }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/users/{userId}/mfa-factors:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/UserId'
+    get:
+      tags: [Users]
+      operationId: listUserMfaFactors
+      summary: 登録済み MFA の一覧
+      security: [{ adminToken: [admin:read] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/MfaFactor' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/users/{userId}/mfa-factors/{factorId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/UserId'
+      - name: factorId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      tags: [Users]
+      operationId: deleteUserMfaFactor
+      summary: MFA の登録解除
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 解除した }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/users/{userId}/roles/{roleId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/UserId'
+      - $ref: '#/components/parameters/RoleId'
+    put:
+      tags: [Users]
+      operationId: assignUserRole
+      summary: ユーザーへのロール割り当て（冪等）
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 割り当てた }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Users]
+      operationId: unassignUserRole
+      summary: ユーザーからのロール解除
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 解除した }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Groups
+  /tenants/{tenantId}/groups:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      tags: [Groups]
+      operationId: listGroups
+      summary: グループ一覧（結果整合性）
+      security: [{ adminToken: [admin:read] }]
+      parameters:
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageToken'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Group' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Groups]
+      operationId: createGroup
+      summary: グループ作成
+      security: [{ adminToken: [admin:write] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GroupWrite' }
+      responses:
+        '201': { $ref: '#/components/responses/GroupResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/groups/{groupId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/GroupId'
+    get:
+      tags: [Groups]
+      operationId: getGroup
+      summary: グループ取得
+      security: [{ adminToken: [admin:read] }]
+      responses:
+        '200': { $ref: '#/components/responses/GroupResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Groups]
+      operationId: updateGroup
+      summary: グループ更新
+      security: [{ adminToken: [admin:write] }]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: { $ref: '#/components/schemas/GroupWrite' }
+      responses:
+        '200': { $ref: '#/components/responses/GroupResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Groups]
+      operationId: deleteGroup
+      summary: グループ削除
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 削除した }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/groups/{groupId}/members:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/GroupId'
+    get:
+      tags: [Groups]
+      operationId: listGroupMembers
+      summary: グループメンバー一覧（結果整合性）
+      security: [{ adminToken: [admin:read] }]
+      parameters:
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageToken'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/User' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/groups/{groupId}/members/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/GroupId'
+      - $ref: '#/components/parameters/UserId'
+    put:
+      tags: [Groups]
+      operationId: addGroupMember
+      summary: メンバー追加（冪等）
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 追加した }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Groups]
+      operationId: removeGroupMember
+      summary: メンバー削除
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 削除した }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/groups/{groupId}/roles/{roleId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/GroupId'
+      - $ref: '#/components/parameters/RoleId'
+    put:
+      tags: [Groups]
+      operationId: assignGroupRole
+      summary: グループへのロール割り当て（冪等）
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 割り当てた }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Groups]
+      operationId: unassignGroupRole
+      summary: グループからのロール解除
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 解除した }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Roles
+  /tenants/{tenantId}/roles:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      tags: [Roles]
+      operationId: listRoles
+      summary: ロール一覧（結果整合性）
+      security: [{ adminToken: [admin:read] }]
+      parameters:
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageToken'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Role' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Roles]
+      operationId: createRole
+      summary: ロール作成
+      security: [{ adminToken: [admin:write] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoleWrite' }
+      responses:
+        '201': { $ref: '#/components/responses/RoleResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/roles/{roleId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/RoleId'
+    get:
+      tags: [Roles]
+      operationId: getRole
+      summary: ロール取得
+      security: [{ adminToken: [admin:read] }]
+      responses:
+        '200': { $ref: '#/components/responses/RoleResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Roles]
+      operationId: updateRole
+      summary: ロール更新
+      security: [{ adminToken: [admin:write] }]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: { $ref: '#/components/schemas/RoleWrite' }
+      responses:
+        '200': { $ref: '#/components/responses/RoleResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Roles]
+      operationId: deleteRole
+      summary: ロール削除
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 削除した }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Clients
+  /tenants/{tenantId}/clients:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      tags: [Clients]
+      operationId: listClients
+      summary: クライアント一覧（結果整合性）
+      security: [{ adminToken: [admin:read] }]
+      parameters:
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageToken'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Client' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Clients]
+      operationId: createClient
+      summary: クライアント登録
+      description: confidential クライアントの場合、レスポンスにクライアントシークレットを**一度だけ**平文で含める。
+      security: [{ adminToken: [admin:write] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClientCreate' }
+      responses:
+        '201':
+          description: 登録した
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Client'
+                  - type: object
+                    properties:
+                      client_secret:
+                        type: string
+                        readOnly: true
+                        description: confidential クライアントのみ。再取得できない
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/clients/{clientId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/ClientId'
+    get:
+      tags: [Clients]
+      operationId: getClient
+      summary: クライアント取得
+      security: [{ adminToken: [admin:read] }]
+      responses:
+        '200': { $ref: '#/components/responses/ClientResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Clients]
+      operationId: updateClient
+      summary: クライアント更新
+      security: [{ adminToken: [admin:write] }]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: { $ref: '#/components/schemas/ClientUpdate' }
+      responses:
+        '200': { $ref: '#/components/responses/ClientResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Clients]
+      operationId: deleteClient
+      summary: クライアント削除
+      description: クライアントを削除し、発行済みのトークンをすべて失効させる。
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 削除した }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/clients/{clientId}/secrets:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/ClientId'
+    get:
+      tags: [Clients]
+      operationId: listClientSecrets
+      summary: クライアントシークレット一覧（値は含まない）
+      security: [{ adminToken: [admin:read] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ClientSecret' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Clients]
+      operationId: createClientSecret
+      summary: クライアントシークレットの追加（ローテーション用）
+      description: 新しいシークレットを発行する。古いシークレットは削除するまで並行して有効。値はこのレスポンスでのみ返す。
+      security: [{ adminToken: [admin:write] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expires_at: { type: string, format: date-time }
+      responses:
+        '201':
+          description: 発行した
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ClientSecret'
+                  - type: object
+                    required: [secret]
+                    properties:
+                      secret: { type: string, readOnly: true }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/clients/{clientId}/secrets/{secretId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/ClientId'
+      - name: secretId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      tags: [Clients]
+      operationId: deleteClientSecret
+      summary: クライアントシークレットの削除
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 削除した }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Identity providers
+  /tenants/{tenantId}/identity-providers:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      tags: [IdentityProviders]
+      operationId: listIdentityProviders
+      summary: 外部 IdP 一覧
+      security: [{ adminToken: [admin:read] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/IdentityProvider' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [IdentityProviders]
+      operationId: createIdentityProvider
+      summary: 外部 IdP 登録
+      security: [{ adminToken: [admin:write] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IdentityProviderWrite' }
+      responses:
+        '201': { $ref: '#/components/responses/IdentityProviderResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/identity-providers/{providerId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - name: providerId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [IdentityProviders]
+      operationId: getIdentityProvider
+      summary: 外部 IdP 取得
+      security: [{ adminToken: [admin:read] }]
+      responses:
+        '200': { $ref: '#/components/responses/IdentityProviderResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [IdentityProviders]
+      operationId: updateIdentityProvider
+      summary: 外部 IdP 更新
+      security: [{ adminToken: [admin:write] }]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: { $ref: '#/components/schemas/IdentityProviderWrite' }
+      responses:
+        '200': { $ref: '#/components/responses/IdentityProviderResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [IdentityProviders]
+      operationId: deleteIdentityProvider
+      summary: 外部 IdP 削除
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 削除した }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- SAML service providers
+  /tenants/{tenantId}/saml-service-providers:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      tags: [SAMLServiceProviders]
+      operationId: listSamlServiceProviders
+      summary: SAML SP 一覧
+      security: [{ adminToken: [admin:read] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/SamlServiceProvider' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [SAMLServiceProviders]
+      operationId: createSamlServiceProvider
+      summary: SAML SP の登録（SP のメタデータ XML を指定）
+      security: [{ adminToken: [admin:write] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [metadata_xml]
+              properties:
+                metadata_xml: { type: string, description: SP のメタデータ（EntityDescriptor） }
+      responses:
+        '201':
+          description: 登録した
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SamlServiceProvider' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/saml-service-providers/{spId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - name: spId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      tags: [SAMLServiceProviders]
+      operationId: deleteSamlServiceProvider
+      summary: SAML SP の削除
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 削除した }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Signing keys
+  /tenants/{tenantId}/signing-keys:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      tags: [SigningKeys]
+      operationId: listSigningKeys
+      summary: 署名鍵一覧（公開鍵とステータスのみ）
+      security: [{ adminToken: [admin:read] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/SigningKey' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/signing-keys/rotate:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    post:
+      tags: [SigningKeys]
+      operationId: rotateSigningKeys
+      summary: 署名鍵のローテーション
+      description: |
+        1 段階進める。`next` → `current`、旧 `current` → `retiring`、新しい `next` を生成する。
+        `retiring` の鍵は、その鍵で署名したトークンがすべて期限切れになった時点で `retired` になり JWKS から外れる。
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '200':
+          description: ローテーション後の鍵一覧
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/SigningKey' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Webhook endpoints
+  /tenants/{tenantId}/webhook-endpoints:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      tags: [Webhooks]
+      operationId: listWebhookEndpoints
+      summary: Webhook 配信先一覧
+      security: [{ adminToken: [admin:read] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/WebhookEndpoint' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Webhooks]
+      operationId: createWebhookEndpoint
+      summary: Webhook 配信先の登録
+      description: 署名用シークレットはこのレスポンスでのみ返す。
+      security: [{ adminToken: [admin:write] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookEndpointWrite' }
+      responses:
+        '201':
+          description: 登録した
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/WebhookEndpoint'
+                  - type: object
+                    required: [secret]
+                    properties:
+                      secret: { type: string, readOnly: true }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /tenants/{tenantId}/webhook-endpoints/{endpointId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - name: endpointId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Webhooks]
+      operationId: getWebhookEndpoint
+      summary: Webhook 配信先の取得
+      security: [{ adminToken: [admin:read] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookEndpoint' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Webhooks]
+      operationId: updateWebhookEndpoint
+      summary: Webhook 配信先の更新
+      security: [{ adminToken: [admin:write] }]
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: { $ref: '#/components/schemas/WebhookEndpointWrite' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookEndpoint' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Webhooks]
+      operationId: deleteWebhookEndpoint
+      summary: Webhook 配信先の削除
+      security: [{ adminToken: [admin:write] }]
+      responses:
+        '204': { description: 削除した }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Audit logs
+  /tenants/{tenantId}/audit-logs:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      tags: [AuditLogs]
+      operationId: listAuditLogs
+      summary: 監査ログの検索（結果整合性）
+      description: Outbox Relay が非同期に追記するため、操作直後のログは含まれない場合がある。
+      security: [{ adminToken: [admin:audit:read] }]
+      parameters:
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageToken'
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: actor_id
+          in: query
+          schema: { type: string }
+        - name: action
+          in: query
+          description: 例：`user.login`、`user.disabled`
+          schema: { type: string }
+        - name: result
+          in: query
+          schema: { type: string, enum: [success, failure] }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/AuditLog' }
+        default: { $ref: '#/components/responses/Problem' }
+
+webhooks:
+  event:
+    post:
+      tags: [Webhooks]
+      operationId: receiveEvent
+      summary: 変更イベントの通知
+      description: |
+        登録した Webhook 配信先に、購読しているイベントを POST する。
+
+        - **署名**：`IdaaS-Signature` ヘッダーで検証する。値は `t=<UNIX秒>,v1=<署名>` で、
+          署名は `HMAC-SHA256(secret, "<t>.<リクエストボディ>")` の 16 進表記。
+          `t` が現在時刻から 5 分以上ずれていたら拒否する（リプレイ対策）。
+        - **再送**：2xx 以外または応答なしの場合、指数バックオフで再送する。
+          受信側は `IdaaS-Event-Id`（= `id`）で重複を排除すること。
+        - **順序**：配信順は保証しない。順序が必要な場合は `occurred_at` を使う。
+      parameters:
+        - name: IdaaS-Signature
+          in: header
+          required: true
+          schema: { type: string, example: 't=1732406400,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd' }
+        - name: IdaaS-Event-Id
+          in: header
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Event' }
+      responses:
+        '2XX': { description: 受信した。これ以外は再送対象 }
+
+components:
+  securitySchemes:
+    adminToken:
+      type: oauth2
+      description: 管理用テナント（slug `admin`）に登録したクライアントが、Client Credentials Grant で取得したアクセストークン
+      flows:
+        clientCredentials:
+          tokenUrl: https://idaas.example.com/t/admin/token
+          scopes:
+            admin:read: 管理リソースの参照
+            admin:write: 管理リソースの作成・更新・削除
+            admin:audit:read: 監査ログの参照
+
+  parameters:
+    TenantId:
+      name: tenantId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: 内部ユーザー ID（不変）
+      schema: { type: string, format: uuid }
+    GroupId:
+      name: groupId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RoleId:
+      name: roleId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ClientId:
+      name: clientId
+      in: path
+      required: true
+      description: 内部 ID（OAuth の `client_id` ではない）
+      schema: { type: string, format: uuid }
+    PageSize:
+      name: page_size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    PageToken:
+      name: page_token
+      in: query
+      schema: { type: string }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: 取得時の `ETag`
+      schema: { type: string }
+
+  headers:
+    ETag:
+      description: リソースのバージョン。更新時に `If-Match` で指定する
+      schema: { type: string }
+
+  responses:
+    Problem:
+      description: エラー
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    TenantResponse:
+      description: OK
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Tenant' }
+    UserResponse:
+      description: OK
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/User' }
+    GroupResponse:
+      description: OK
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Group' }
+    RoleResponse:
+      description: OK
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Role' }
+    ClientResponse:
+      description: OK
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Client' }
+    IdentityProviderResponse:
+      description: OK
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/IdentityProvider' }
+
+  schemas:
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details
+      required: [type, title, status]
+      properties:
+        type: { type: string, format: uri, example: 'https://idaas.example.com/problems/conflict' }
+        title: { type: string, example: Conflict }
+        status: { type: integer, example: 409 }
+        detail: { type: string, example: user_name は既に使われている }
+        instance: { type: string }
+        errors:
+          type: array
+          description: 入力検証エラーの詳細
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string }
+              message: { type: string }
+
+    Page:
+      type: object
+      properties:
+        next_page_token:
+          type: [string, 'null']
+          description: 次ページがない場合は null
+
+    Meta:
+      type: object
+      description: SCIM 2.0 の `meta` に相当
+      readOnly: true
+      required: [created, last_modified, version]
+      properties:
+        created: { type: string, format: date-time }
+        last_modified: { type: string, format: date-time }
+        version: { type: string, description: ETag と同じ値 }
+
+    # --- Tenant
+    Tenant:
+      type: object
+      required: [id, slug, name, issuer, meta]
+      properties:
+        id: { type: string, format: uuid, readOnly: true }
+        slug:
+          type: string
+          pattern: '^[a-z0-9-]{3,63}$'
+          description: issuer の URL に使う識別子
+        name: { type: string }
+        issuer:
+          type: string
+          format: uri
+          readOnly: true
+          example: https://idaas.example.com/t/acme
+        settings: { $ref: '#/components/schemas/TenantSettings' }
+        meta: { $ref: '#/components/schemas/Meta' }
+    TenantCreate:
+      type: object
+      required: [slug, name]
+      properties:
+        slug: { type: string, pattern: '^[a-z0-9-]{3,63}$' }
+        name: { type: string }
+        settings: { $ref: '#/components/schemas/TenantSettings' }
+    TenantUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        settings: { $ref: '#/components/schemas/TenantSettings' }
+    TenantSettings:
+      type: object
+      properties:
+        password_min_length: { type: integer, minimum: 8, default: 12 }
+        password_breach_check: { type: boolean, default: false, description: HIBP による漏洩チェック }
+        mfa_required: { type: boolean, default: false }
+        lockout_threshold: { type: integer, minimum: 1, default: 5, description: 連続失敗でロックする回数 }
+        lockout_duration_seconds: { type: integer, minimum: 60, default: 900 }
+        session_idle_timeout_seconds: { type: integer, default: 1800 }
+        session_absolute_timeout_seconds: { type: integer, default: 43200 }
+        access_token_ttl_seconds: { type: integer, default: 600 }
+        id_token_ttl_seconds: { type: integer, default: 600 }
+        refresh_token_ttl_seconds: { type: integer, default: 2592000 }
+
+    # --- User（SCIM 2.0 の User に寄せる）
+    UserStatus:
+      type: string
+      enum: [active, disabled, locked]
+    User:
+      type: object
+      required: [id, user_name, email, email_verified, status, meta]
+      properties:
+        id: { type: string, format: uuid, readOnly: true, description: 内部ユーザー ID（不変） }
+        user_name: { type: string, description: ログイン ID（変更可能、テナント内で一意） }
+        email: { type: string, format: email }
+        email_verified: { type: boolean }
+        name: { $ref: '#/components/schemas/UserName' }
+        status: { $ref: '#/components/schemas/UserStatus' }
+        roles:
+          type: array
+          readOnly: true
+          description: 直接割り当てとグループ経由の割り当てを合わせた実効ロール名
+          items: { type: string }
+        meta: { $ref: '#/components/schemas/Meta' }
+    UserName:
+      type: object
+      properties:
+        given_name: { type: string }
+        family_name: { type: string }
+    UserCreate:
+      type: object
+      required: [user_name, email]
+      properties:
+        user_name: { type: string }
+        email: { type: string, format: email }
+        email_verified: { type: boolean, default: false }
+        name: { $ref: '#/components/schemas/UserName' }
+        password:
+          type: string
+          format: password
+          writeOnly: true
+          description: 省略した場合、ユーザーはパスワードリセットで初期設定する
+    UserUpdate:
+      type: object
+      properties:
+        user_name: { type: string }
+        email: { type: string, format: email, description: 変更すると email_verified は false に戻る }
+        name: { $ref: '#/components/schemas/UserName' }
+    MfaFactor:
+      type: object
+      required: [id, type, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [totp, webauthn, recovery_codes] }
+        label: { type: string, description: WebAuthn の認証器名など }
+        created_at: { type: string, format: date-time }
+        last_used_at: { type: [string, 'null'], format: date-time }
+
+    # --- Group / Role
+    Group:
+      type: object
+      required: [id, name, meta]
+      properties:
+        id: { type: string, format: uuid, readOnly: true }
+        name: { type: string }
+        roles:
+          type: array
+          readOnly: true
+          items: { type: string }
+        meta: { $ref: '#/components/schemas/Meta' }
+    GroupWrite:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+    Role:
+      type: object
+      required: [id, name, meta]
+      properties:
+        id: { type: string, format: uuid, readOnly: true }
+        name:
+          type: string
+          pattern: '^[a-z0-9:._-]{1,64}$'
+          description: トークンの `roles` クレームに出す値
+        description: { type: string }
+        meta: { $ref: '#/components/schemas/Meta' }
+    RoleWrite:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, pattern: '^[a-z0-9:._-]{1,64}$' }
+        description: { type: string }
+
+    # --- Client
+    Client:
+      type: object
+      required: [id, client_id, name, client_type, token_endpoint_auth_method, grant_types, redirect_uris, meta]
+      properties:
+        id: { type: string, format: uuid, readOnly: true }
+        client_id: { type: string, readOnly: true, description: OAuth の client_id }
+        name: { type: string }
+        client_type: { type: string, enum: [confidential, public] }
+        first_party: { type: boolean, default: false, description: true の場合は同意画面をスキップ }
+        token_endpoint_auth_method:
+          type: string
+          enum: [client_secret_basic, client_secret_post, none]
+          description: public クライアントは `none`（PKCE 必須）
+        grant_types:
+          type: array
+          items: { type: string, enum: [authorization_code, refresh_token, client_credentials] }
+        redirect_uris:
+          type: array
+          description: 完全一致で検証する
+          items: { type: string, format: uri }
+        post_logout_redirect_uris:
+          type: array
+          items: { type: string, format: uri }
+        backchannel_logout_uri: { type: [string, 'null'], format: uri }
+        allowed_scopes:
+          type: array
+          items: { type: string }
+          example: [openid, profile, email, offline_access]
+        access_token_format: { type: string, enum: [jwt, opaque], default: jwt }
+        meta: { $ref: '#/components/schemas/Meta' }
+    ClientCreate:
+      type: object
+      required: [name, client_type, grant_types]
+      properties:
+        name: { type: string }
+        client_type: { type: string, enum: [confidential, public] }
+        first_party: { type: boolean, default: false }
+        token_endpoint_auth_method: { type: string, enum: [client_secret_basic, client_secret_post, none] }
+        grant_types:
+          type: array
+          items: { type: string, enum: [authorization_code, refresh_token, client_credentials] }
+        redirect_uris:
+          type: array
+          items: { type: string, format: uri }
+        post_logout_redirect_uris:
+          type: array
+          items: { type: string, format: uri }
+        backchannel_logout_uri: { type: string, format: uri }
+        allowed_scopes:
+          type: array
+          items: { type: string }
+        access_token_format: { type: string, enum: [jwt, opaque] }
+    ClientUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        first_party: { type: boolean }
+        redirect_uris:
+          type: array
+          items: { type: string, format: uri }
+        post_logout_redirect_uris:
+          type: array
+          items: { type: string, format: uri }
+        backchannel_logout_uri: { type: [string, 'null'], format: uri }
+        allowed_scopes:
+          type: array
+          items: { type: string }
+        access_token_format: { type: string, enum: [jwt, opaque] }
+    ClientSecret:
+      type: object
+      required: [id, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: [string, 'null'], format: date-time }
+
+    # --- Identity provider
+    IdentityProvider:
+      type: object
+      required: [id, name, type, issuer, client_id, scopes, allow_signup, meta]
+      properties:
+        id: { type: string, format: uuid, readOnly: true }
+        name: { type: string, example: Google }
+        type: { type: string, enum: [oidc] }
+        issuer: { type: string, format: uri, example: 'https://accounts.google.com' }
+        client_id: { type: string }
+        scopes:
+          type: array
+          items: { type: string }
+          default: [openid, email, profile]
+        allow_signup: { type: boolean, description: 未連携かつ該当ユーザーがいない場合に新規作成するか }
+        meta: { $ref: '#/components/schemas/Meta' }
+    IdentityProviderWrite:
+      type: object
+      required: [name, type, issuer, client_id]
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [oidc] }
+        issuer: { type: string, format: uri }
+        client_id: { type: string }
+        client_secret: { type: string, writeOnly: true }
+        scopes:
+          type: array
+          items: { type: string }
+        allow_signup: { type: boolean, default: false }
+
+    # --- SAML service provider
+    SamlServiceProvider:
+      type: object
+      required: [id, entity_id, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        entity_id: { type: string }
+        created_at: { type: string, format: date-time }
+
+    # --- Signing key
+    SigningKey:
+      type: object
+      required: [kid, alg, status, public_jwk, created_at]
+      properties:
+        kid: { type: string }
+        alg: { type: string, enum: [RS256, ES256] }
+        status: { type: string, enum: [next, current, retiring, retired] }
+        public_jwk: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+        activated_at: { type: [string, 'null'], format: date-time }
+        retired_at: { type: [string, 'null'], format: date-time }
+
+    # --- Webhook
+    WebhookEndpoint:
+      type: object
+      required: [id, url, event_types, enabled]
+      properties:
+        id: { type: string, format: uuid, readOnly: true }
+        url: { type: string, format: uri }
+        event_types:
+          type: array
+          items: { $ref: '#/components/schemas/EventType' }
+        enabled: { type: boolean }
+    WebhookEndpointWrite:
+      type: object
+      properties:
+        url: { type: string, format: uri }
+        event_types:
+          type: array
+          items: { $ref: '#/components/schemas/EventType' }
+        enabled: { type: boolean }
+    EventType:
+      type: string
+      enum:
+        - user.created
+        - user.updated
+        - user.disabled
+        - user.enabled
+        - user.locked
+        - user.unlocked
+        - user.deleted
+        - user.purged
+        - user.password_changed
+        - user.mfa_enrolled
+        - user.mfa_removed
+        - user.role_assigned
+        - user.role_unassigned
+        - group.created
+        - group.updated
+        - group.deleted
+        - group.member_added
+        - group.member_removed
+        - role.created
+        - role.updated
+        - role.deleted
+        - client.created
+        - client.updated
+        - client.deleted
+        - client.secret_created
+        - client.secret_deleted
+        - signing_key.rotated
+    Event:
+      type: object
+      required: [id, type, tenant_id, occurred_at, actor, data]
+      properties:
+        id: { type: string, format: uuid, description: '`outbox_events.id`。重複排除に使う' }
+        type: { $ref: '#/components/schemas/EventType' }
+        tenant_id: { type: string, format: uuid }
+        occurred_at: { type: string, format: date-time }
+        actor: { $ref: '#/components/schemas/Actor' }
+        data:
+          type: object
+          description: '`type` に応じた対象リソース。`user.*` は User、`group.*` は Group など。削除系は `id` のみ'
+          additionalProperties: true
+
+    Actor:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [user, admin, client, system] }
+        id: { type: [string, 'null'] }
+
+    # --- Audit log
+    AuditLog:
+      type: object
+      required: [seq, event_id, occurred_at, actor, action, result]
+      properties:
+        seq: { type: integer, format: int64 }
+        event_id: { type: string, format: uuid }
+        occurred_at: { type: string, format: date-time, description: いつ }
+        actor: { $ref: '#/components/schemas/Actor' }
+        action: { type: string, description: 何を（例：`user.login`） }
+        target:
+          type: object
+          properties:
+            type: { type: string }
+            id: { type: string }
+        result: { type: string, enum: [success, failure] }
+        ip: { type: string, description: どこから }
+        user_agent: { type: string }
+        details: { type: object, additionalProperties: true }

@@ -1,0 +1,8 @@
+{{template "head" .}}
+<form method="post" action="{{.Base}}/forgot">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}">
+<label for="login_id">ログイン ID またはメールアドレス</label>
+<input type="text" id="login_id" name="login_id" required autofocus>
+<button type="submit">リセット用のリンクを送る</button>
+</form>
+{{template "foot" .}}

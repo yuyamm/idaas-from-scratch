@@ -1,0 +1,10 @@
+{{template "head" .}}
+<p><strong>{{.Data.ClientName}}</strong> が次の情報へのアクセスを求めています。</p>
+<ul>{{range .Data.Scopes}}<li>{{.}}</li>{{end}}</ul>
+<form method="post" action="{{.Base}}/consent">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}">
+<input type="hidden" name="return_to" value="{{.ReturnTo}}">
+<button type="submit" name="decision" value="allow">許可する</button>
+<button class="secondary" type="submit" name="decision" value="deny">拒否する</button>
+</form>
+{{template "foot" .}}

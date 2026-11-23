@@ -1,0 +1,4 @@
+{{template "head" .}}
+{{if .Data.Message}}<p>{{.Data.Message}}</p>{{end}}
+{{if .Data.Link}}<div class="links"><a href="{{.Data.Link}}">{{.Data.LinkText}}</a></div>{{end}}
+{{template "foot" .}}

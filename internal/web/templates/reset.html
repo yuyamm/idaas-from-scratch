@@ -1,0 +1,9 @@
+{{template "head" .}}
+<form method="post" action="{{.Base}}/reset">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}">
+<input type="hidden" name="token" value="{{.Data.Token}}">
+<label for="password">新しいパスワード</label>
+<input type="password" id="password" name="password" autocomplete="new-password" required autofocus>
+<button type="submit">パスワードを変更</button>
+</form>
+{{template "foot" .}}

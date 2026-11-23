@@ -1,0 +1,29 @@
+{{template "head" .}}
+<p id="status">{{if .Data.Register}}この端末のパスキーを登録します。{{else}}パスキーでログインします。{{end}}</p>
+<button type="button" id="go">{{if .Data.Register}}パスキーを登録{{else}}パスキーでログイン{{end}}</button>
+<script>
+const b64u = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const ub64 = s => Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')), c => c.charCodeAt(0));
+const base = "{{.Base}}", register = {{.Data.Register}}, csrf = "{{.CSRF}}", returnTo = "{{.ReturnTo}}";
+document.getElementById('go').onclick = async () => {
+  const st = document.getElementById('status');
+  try {
+    const begin = await fetch(base + (register ? '/passkey/register/begin' : '/passkey/login/begin'), {method:'POST', headers:{'X-CSRF-Token':csrf}});
+    const opts = await begin.json();
+    const pk = opts.publicKey;
+    pk.challenge = ub64(pk.challenge);
+    if (pk.user) pk.user.id = ub64(pk.user.id);
+    for (const k of ['excludeCredentials','allowCredentials']) if (pk[k]) pk[k] = pk[k].map(c => ({...c, id: ub64(c.id)}));
+    const cred = register ? await navigator.credentials.create({publicKey: pk}) : await navigator.credentials.get({publicKey: pk});
+    const r = cred.response, body = {id: cred.id, rawId: b64u(cred.rawId), type: cred.type, response: {clientDataJSON: b64u(r.clientDataJSON)}};
+    if (register) { body.response.attestationObject = b64u(r.attestationObject); }
+    else { body.response.authenticatorData = b64u(r.authenticatorData); body.response.signature = b64u(r.signature); body.response.userHandle = r.userHandle ? b64u(r.userHandle) : null; }
+    const fin = await fetch(base + (register ? '/passkey/register/finish' : '/passkey/login/finish') + '?return_to=' + encodeURIComponent(returnTo),
+      {method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, body: JSON.stringify(body)});
+    const res = await fin.json();
+    if (!fin.ok) throw new Error(res.error || 'failed');
+    location.href = res.redirect;
+  } catch (e) { st.textContent = 'エラー: ' + e.message; }
+};
+</script>
+{{template "foot" .}}
